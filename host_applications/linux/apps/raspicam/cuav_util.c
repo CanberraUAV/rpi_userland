@@ -20,7 +20,7 @@
 #include <signal.h>       
 #include <math.h>       
 
-#include "libjpeg/jpeglib.h"
+#include <jpeglib.h>
 #include "cuav_util.h"
 
 #pragma GCC optimize("O3")
