@@ -18,6 +18,7 @@
 #include <stdbool.h>
 #include <sys/wait.h>
 #include <signal.h>       
+#include <math.h>       
 
 #include "libjpeg/jpeglib.h"
 #include "cuav_util.h"
@@ -38,8 +39,8 @@ struct PACKED rgb8 {
     uint8_t r, g, b;
 };
 
-struct PACKED rgb16 {
-    uint16_t r, g, b;
+struct PACKED rgbf {
+    float r, g, b;
 };
 
 /*
@@ -57,12 +58,18 @@ struct PACKED rgb8_image {
 };
 
 /*
-  RGB image, 16 bit
+  RGB image, float
  */
-struct PACKED rgb16_image {
-    struct rgb16 data[IMG_HEIGHT][IMG_WIDTH];
+struct PACKED rgbf_image {
+    struct rgbf data[IMG_HEIGHT][IMG_WIDTH];
 };
 
+/*
+  len shading scaling array
+ */
+struct lens_shading {
+    float scale[IMG_HEIGHT][IMG_WIDTH];
+};
 
 struct brcm_header {
     char tag[4]; // BRCM
@@ -139,7 +146,7 @@ static void save_ppm(const struct rgb8_image *rgb, const char *fname)
     fclose(f);
 }
 
-static void debayer_BGGR(const struct bayer_image *bayer, struct rgb16_image *rgb)
+static void debayer_BGGR_float(const struct bayer_image *bayer, struct rgbf_image *rgb)
 {
     /*
       layout in the input image is in blocks of 4 values. The top
@@ -149,7 +156,7 @@ static void debayer_BGGR(const struct bayer_image *bayer, struct rgb16_image *rg
       B G B G
       G R G R
     */
-    uint16_t y, x;
+    uint16_t x, y;
     for (y=1; y<IMG_HEIGHT-2; y += 2) {
         for (x=1; x<IMG_WIDTH-2; x += 2) {
             rgb->data[y+0][x+0].r = bayer->data[y+0][x+0];
@@ -157,60 +164,114 @@ static void debayer_BGGR(const struct bayer_image *bayer, struct rgb16_image *rg
                                      (uint16_t)bayer->data[y+1][x+0] + (uint16_t)bayer->data[y+0][x+1]) >> 2;
             rgb->data[y+0][x+0].b = ((uint16_t)bayer->data[y-1][x-1] + (uint16_t)bayer->data[y+1][x-1] +
                                      (uint16_t)bayer->data[y-1][x+1] + (uint16_t)bayer->data[y+1][x+1]) >> 2;
-            rgb->data[y+0][x+0].g *= 0.65;
-
             rgb->data[y+0][x+1].r = ((uint16_t)bayer->data[y+0][x+0] + (uint16_t)bayer->data[y+0][x+2]) >> 1;
             rgb->data[y+0][x+1].g = bayer->data[y+0][x+1];
             rgb->data[y+0][x+1].b = ((uint16_t)bayer->data[y-1][x+1] + (uint16_t)bayer->data[y+1][x+1]) >> 1;
-
-            rgb->data[y+0][x+1].g *= 0.65;
 
             rgb->data[y+1][x+0].r = ((uint16_t)bayer->data[y+0][x+0] + (uint16_t)bayer->data[y+2][x+0]) >> 1;
             rgb->data[y+1][x+0].g = bayer->data[y+1][x+0];
             rgb->data[y+1][x+0].b = ((uint16_t)bayer->data[y+1][x-1] + (uint16_t)bayer->data[y+1][x+1]) >> 1;
 
-            rgb->data[y+1][x+0].g *= 0.65;
-            
             rgb->data[y+1][x+1].r = ((uint16_t)bayer->data[y+0][x+0] + (uint16_t)bayer->data[y+2][x+0] +
                                      (uint16_t)bayer->data[y+0][x+2] + (uint16_t)bayer->data[y+2][x+2]) >> 2;
             rgb->data[y+1][x+1].g = ((uint16_t)bayer->data[y+0][x+1] + (uint16_t)bayer->data[y+1][x+2] +
                                      (uint16_t)bayer->data[y+2][x+1] + (uint16_t)bayer->data[y+1][x+0]) >> 2;
             rgb->data[y+1][x+1].b = bayer->data[y+1][x+1];
-
-            rgb->data[y+1][x+1].g *= 0.65;
         }
         rgb->data[y+0][0] = rgb->data[y+0][1];
         rgb->data[y+1][0] = rgb->data[y+1][1];
         rgb->data[y+0][IMG_WIDTH-1] = rgb->data[y+0][IMG_WIDTH-2];
         rgb->data[y+1][IMG_WIDTH-1] = rgb->data[y+1][IMG_WIDTH-2];
     }
-    memcpy(rgb->data[0], rgb->data[1], IMG_WIDTH*3);
-    memcpy(rgb->data[IMG_HEIGHT-1], rgb->data[IMG_HEIGHT-2], IMG_WIDTH*3);
+    memcpy(rgb->data[0], rgb->data[1], IMG_WIDTH*sizeof(rgb->data[0][0]));
+    memcpy(rgb->data[IMG_HEIGHT-1], rgb->data[IMG_HEIGHT-2], IMG_WIDTH*sizeof(rgb->data[0][0]));
 }
 
-static void rgb16_to_rgb8(const struct rgb16_image *rgb16, struct rgb8_image *rgb8)
+static void rgbf_change_saturation(struct rgbf_image *rgbf, float change)
 {
-    const struct rgb16 *d = &rgb16->data[0][0];
-    uint16_t highest = 0;
-    uint32_t i;
-    for (i=0; i<IMG_WIDTH*IMG_HEIGHT; i++) {
-        if (d[i].r > highest) {
-            highest = d[i].r;
-        }
-        if (d[i].g > highest) {
-            highest = d[i].g;
-        }
-        if (d[i].b > highest) {
-            highest = d[i].b;
+    const float Pr = .299;
+    const float Pg = .587;
+    const float Pb = .114;
+
+    uint16_t x, y;
+    for (y=0; y<IMG_HEIGHT; y++) {
+        for (x=0; x<IMG_WIDTH; x++) {
+            float r = rgbf->data[y][x].r;
+            float g = rgbf->data[y][x].g;
+            float b = rgbf->data[y][x].b;
+            //float P = sqrtf(r*r+Pr + g*g*Pg + b*b*Pb);
+            float P = Pr*r + Pb*b + Pg*g;
+            rgbf->data[y][x].r = P + (r - P) * change;
+            rgbf->data[y][x].g = P + (g - P) * change;
+            rgbf->data[y][x].b = P + (b - P) * change;
         }
     }
-    float scale = 255.0 / highest;
+}
+
+static struct lens_shading *shading;
+const float shading_scale_factor = 1.9;
+
+/*
+  create a lens shading correction array
+ */
+static void create_lens_shading(void)
+{
+    shading = malloc(sizeof(*shading));
     uint16_t y, x;
     for (y=0; y<IMG_HEIGHT; y++) {
         for (x=0; x<IMG_WIDTH; x++) {
-            rgb8->data[y][x].r = rgb16->data[y][x].r * scale;
-            rgb8->data[y][x].g = rgb16->data[y][x].g * scale;
-            rgb8->data[y][x].b = rgb16->data[y][x].b * scale;
+            float dx = fabsf(((float)x) - IMG_WIDTH/2) / (IMG_WIDTH/2);
+            float dy = fabsf(((float)y) - IMG_HEIGHT/2) / (IMG_HEIGHT/2);
+            float from_center = sqrt(dx*dx + dy*dy);
+            if (from_center > 1.0) {
+                from_center = 1.0;
+            }
+            shading->scale[y][x] = 1.0 + from_center * shading_scale_factor;
+        }
+    }
+}
+
+static void rgbf_to_rgb8(const struct rgbf_image *rgbf, struct rgb8_image *rgb8)
+{
+    float highest = 0;
+    uint16_t x, y;
+    
+    for (y=0; y<IMG_HEIGHT; y++) {
+        for (x=0; x<IMG_WIDTH; x++) {
+            const struct rgbf *d = &rgbf->data[y][x];
+            if (d->r > highest) {
+                highest = d->r * shading->scale[y][x];
+            }
+            if (d->g > highest) {
+                highest = d->g * shading->scale[y][x];
+            }
+            if (d->b > highest) {
+                highest = d->b * shading->scale[y][x];
+            }
+        }
+    }
+
+    float scale = 255 / highest;
+    const float cscale[3] = { 1, 0.48, 0.82 };
+#define MIN(a,b) ((a)<(b)?(a):(b))
+    for (y=0; y<IMG_HEIGHT; y++) {
+        for (x=0; x<IMG_WIDTH; x++) {
+            float shade_scale = shading->scale[y][x];
+            if (rgbf->data[y][x].r >= 1022) {
+                rgb8->data[y][x].r = 255;
+            } else {
+                rgb8->data[y][x].r = MIN(rgbf->data[y][x].r * scale * cscale[0] * shade_scale, 255);
+            }
+            if (rgbf->data[y][x].g >= 1022) {
+                rgb8->data[y][x].g = 255;
+            } else {
+                rgb8->data[y][x].g = MIN(rgbf->data[y][x].g * scale * cscale[1] * shade_scale, 255);
+            }
+            if (rgbf->data[y][x].b >= 1022) {
+                rgb8->data[y][x].b = 255;
+            } else {
+                rgb8->data[y][x].b = MIN(rgbf->data[y][x].b * scale * cscale[2] * shade_scale, 255);
+            }
         }
     }
 }
@@ -295,7 +356,7 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename)
 {
     printf("Processing %u bytes\n", size);
     struct bayer_image *bayer;
-    struct rgb16_image *rgb16;
+    struct rgbf_image *rgbf;
     struct rgb8_image *rgb8;
 
     struct timeval tv;
@@ -316,7 +377,22 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename)
              tv.tv_usec/10000);
     printf("fname=%s\n", fname);
 
+    char *fname_orig = NULL;
+    asprintf(&fname_orig, "%s%04u%02u%02u%02u%02u%02u%02uZ-orig.jpg",
+             filename,
+             tm.tm_year+1900,
+             tm.tm_mon+1,
+             tm.tm_mday,
+             tm.tm_hour,
+             tm.tm_min,
+             tm.tm_sec,
+             tv.tv_usec/10000);
+    
     signal(SIGCHLD, SIG_IGN);
+
+    if (!shading) {
+        create_lens_shading();
+    }
     
     if (fork() == 0) {
         // run processing and saving in background
@@ -325,19 +401,29 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename)
     
         extract_rpi_bayer(buffer, size, bayer);
 
-        rgb16 = malloc(sizeof(*rgb16));
-        debayer_BGGR(bayer, rgb16);
+        rgbf = malloc(sizeof(*rgbf));
+        debayer_BGGR_float(bayer, rgbf);
         free(bayer);
+
+        rgbf_change_saturation(rgbf, 1.5);
         
         rgb8 = malloc(sizeof(*rgb8));
-        rgb16_to_rgb8(rgb16, rgb8);
-        free(rgb16);
+        rgbf_to_rgb8(rgbf, rgb8);
+        free(rgbf);
         
         write_JPG(fname, rgb8, 100);
+
+        free(rgb8);
+
+#if 0
+        FILE *f = fopen(fname_orig, "w");
+        fwrite(buffer, size, 1, f);
+        fclose(f);
+#endif
+        
         _exit(0);
     }
 
     free(fname);
-
-    free(rgb8);
+    free(fname_orig);
 }

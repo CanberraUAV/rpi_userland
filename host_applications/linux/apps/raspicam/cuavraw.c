@@ -346,9 +346,9 @@ static void default_status(RASPISTILL_STATE *state)
       return;
    }
 
-   state->timeout = 5000; // 5s delay before take image
+   state->timeout = 1; // 1ms delay
    state->quality = 85;
-   state->wantRAW = 0;
+   state->wantRAW = 1;
    state->filename = NULL;
    state->linkname = NULL;
    state->frameStart = 0;
@@ -367,9 +367,9 @@ static void default_status(RASPISTILL_STATE *state)
    state->encoding = MMAL_ENCODING_JPEG;
    state->numExifTags = 0;
    state->enableExifTags = 1;
-   state->timelapse = 0;
+   state->timelapse = 1;
    state->fullResPreview = 0;
-   state->frameNextMethod = FRAME_NEXT_FOREVER;
+   state->frameNextMethod = FRAME_NEXT_TIMELAPSE;
    state->useGL = 0;
    state->glCapture = 0;
    state->settings = 0;
