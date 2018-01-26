@@ -2034,8 +2034,10 @@ int main(int argc, const char **argv)
                         if (state.verbose)
                             fprintf(stderr, "Finished capture %d\n", frame);
                     }
-
+	            
+                    //cuav - process file and sleep for 500msec
                     finalise_file(&state, &callback_data);
+		    vcos_sleep(500);
 
                     // Disable encoder output port
                     status = mmal_port_disable(encoder_output_port);
