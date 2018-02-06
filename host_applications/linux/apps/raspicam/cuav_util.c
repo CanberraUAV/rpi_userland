@@ -20,7 +20,7 @@
 #include <signal.h>       
 #include <math.h>       
 
-#include <jpeglib.h>
+#include "libjpeg/jpeglib.h"
 #include "cuav_util.h"
 
 #pragma GCC optimize("O3")
@@ -352,16 +352,16 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
 static struct timeval tp1;
 static struct timeval tp2;
 
-void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename)
+void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, struct timeval tv)
 {
     printf("Processing %u bytes\n", size);
     struct bayer_image *bayer;
     struct rgbf_image *rgbf;
     struct rgb8_image *rgb8;
 
-    struct timeval tv;
+    //struct timeval tv;
     struct tm tm;
-    gettimeofday(&tv, NULL);
+    //gettimeofday(&tv, NULL);
     time_t t = tv.tv_sec;
     gmtime_r(&t, &tm);
 

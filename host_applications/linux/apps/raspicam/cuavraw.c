@@ -61,6 +61,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <unistd.h>
 #include <errno.h>
 #include <sysexits.h>
+#include <sys/time.h>
+#include <time.h>
 
 #define VERSION_STRING "v1.3.11"
 
@@ -1748,9 +1750,9 @@ static int wait_for_next_frame(RASPISTILL_STATE *state, int *frame)
    return keep_running;
 }
 
-static void finalise_file(RASPISTILL_STATE *state, PORT_USERDATA *callback_data)
+static void finalise_file(RASPISTILL_STATE *state, PORT_USERDATA *callback_data, struct timeval tv)
 {
-    cuav_process(callback_data->buffer->data, callback_data->buffer->offset, callback_data->filename);
+    cuav_process(callback_data->buffer->data, callback_data->buffer->offset, callback_data->filename, tv);
     free(callback_data->buffer);
     callback_data->buffer = NULL;
 }
@@ -1905,6 +1907,7 @@ int main(int argc, const char **argv)
                 int frame, keep_looping = 1;
                 char *use_filename = NULL;      // Temporary filename while image being written
                 char *final_filename = NULL;    // Name that file gets once writing complete
+                struct timeval tv;              //The time that the iamge is captured
 
                 frame = state.frameStart - 1;
 
@@ -2027,6 +2030,8 @@ int main(int argc, const char **argv)
                     }
                     else
                     {
+			//get timestamp of capture start
+			gettimeofday(&tv, NULL);
                         // Wait for capture to complete
                         // For some reason using vcos_semaphore_wait_timeout sometimes returns immediately with bad parameter error
                         // even though it appears to be all correct, so reverting to untimed one until figure out why its erratic
@@ -2036,7 +2041,7 @@ int main(int argc, const char **argv)
                     }
 	            
                     //cuav - process file and sleep for 500msec
-                    finalise_file(&state, &callback_data);
+                    finalise_file(&state, &callback_data, tv);
 		    vcos_sleep(500);
 
                     // Disable encoder output port
