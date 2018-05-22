@@ -300,7 +300,6 @@ static void extract_rpi_bayer(const uint8_t *buffer, uint32_t size, struct bayer
 
     if (strncmp(header.tag, "BRCM", 4) != 0) {
         printf("bad header name - expected BRCM\n");
-        static int ret = -1;
         thread_exit();
     }
 
@@ -312,7 +311,6 @@ static void extract_rpi_bayer(const uint8_t *buffer, uint32_t size, struct bayer
 
     if (header.width != IMG_WIDTH*SCALING || header.height != IMG_HEIGHT*SCALING) {
         printf("Unexpected image size\n");
-        static int ret = -1;
         thread_exit();
     }
 
