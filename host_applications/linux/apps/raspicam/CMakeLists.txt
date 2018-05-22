@@ -36,5 +36,5 @@ target_link_libraries(raspividyuv   ${MMAL_LIBS} vcos bcm_host)
 install(TARGETS raspistill raspiyuv raspivid raspividyuv RUNTIME DESTINATION bin)
 
 add_executable(cuavraw ${COMMON_SOURCES} cuavraw.c  RaspiTex.c RaspiTexUtil.c tga.c cuav_util.c ${GL_SCENE_SOURCES})
-target_link_libraries(cuavraw ${MMAL_LIBS} vcos bcm_host brcmGLESv2 brcmEGL m ${CMAKE_CURRENT_SOURCE_DIR}/libjpeg/libjpeg.a)
+target_link_libraries(cuavraw ${MMAL_LIBS} vcos bcm_host brcmGLESv2 brcmEGL m jpeg)
 install(TARGETS cuavraw RUNTIME DESTINATION bin)
