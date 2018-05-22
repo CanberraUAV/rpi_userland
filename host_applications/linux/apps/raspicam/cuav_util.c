@@ -401,6 +401,8 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
         free(rgbf);
         
         write_JPG(fname, rgb8, 100);
+
+	remove(linkname);
         symlink(fname, linkname);
 
         free(rgb8);
