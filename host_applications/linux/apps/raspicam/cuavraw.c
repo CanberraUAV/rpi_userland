@@ -1752,7 +1752,7 @@ static int wait_for_next_frame(RASPISTILL_STATE *state, int *frame)
 
 static void finalise_file(RASPISTILL_STATE *state, PORT_USERDATA *callback_data, struct timeval tv)
 {
-    cuav_process(callback_data->buffer->data, callback_data->buffer->offset, callback_data->filename, tv);
+    cuav_process(callback_data->buffer->data, callback_data->buffer->offset, callback_data->filename, state->linkname, tv);
     free(callback_data->buffer);
     callback_data->buffer = NULL;
 }

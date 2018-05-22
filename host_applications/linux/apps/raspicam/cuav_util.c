@@ -352,7 +352,7 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
 static struct timeval tp1;
 static struct timeval tp2;
 
-void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, struct timeval tv)
+void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, const char *linkname, struct timeval tv)
 {
     printf("Processing %u bytes\n", size);
     struct bayer_image *bayer;
@@ -376,17 +376,6 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, st
              tm.tm_sec,
              tv.tv_usec/10000);
     printf("fname=%s\n", fname);
-
-    char *fname_orig = NULL;
-    asprintf(&fname_orig, "%s%04u%02u%02u%02u%02u%02u%02uZ-orig.jpg",
-             filename,
-             tm.tm_year+1900,
-             tm.tm_mon+1,
-             tm.tm_mday,
-             tm.tm_hour,
-             tm.tm_min,
-             tm.tm_sec,
-             tv.tv_usec/10000);
     
     signal(SIGCHLD, SIG_IGN);
 
@@ -412,18 +401,13 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, st
         free(rgbf);
         
         write_JPG(fname, rgb8, 100);
+        symlink(fname, linkname);
 
         free(rgb8);
-
-#if 0
-        FILE *f = fopen(fname_orig, "w");
-        fwrite(buffer, size, 1, f);
-        fclose(f);
-#endif
         
         _exit(0);
     }
 
     free(fname);
-    free(fname_orig);
+
 }
