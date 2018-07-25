@@ -108,44 +108,6 @@ static void extract_raw10(const uint8_t *b, uint16_t width, uint16_t height, uin
     }
 }
 
-
-static void save_pgm(const struct bayer_image *bayer, const char *fname)
-{
-    FILE *f = fopen(fname, "w");
-    if (f == NULL) {
-        perror(fname);
-        exit(1);
-    }
-    fprintf(f, "P5\n%u %u\n65535\n", IMG_WIDTH, IMG_HEIGHT);
-    uint16_t y;
-    for (y=0; y<IMG_HEIGHT; y++) {
-        uint16_t row[IMG_WIDTH];
-        swab(&bayer->data[y][0], &row[0], IMG_WIDTH*2);
-        if (fwrite(&row[0], IMG_WIDTH*2, 1, f) != 1) {
-            printf("write error\n");
-            exit(1);
-        }
-    }
-
-    fclose(f);
-}
-
-static void save_ppm(const struct rgb8_image *rgb, const char *fname)
-{
-    FILE *f = fopen(fname, "w");
-    if (f == NULL) {
-        perror(fname);
-        exit(1);
-    }
-    fprintf(f, "P6\n%u %u\n255\n", IMG_WIDTH, IMG_HEIGHT);
-    if (fwrite(&rgb->data[0][0], IMG_WIDTH*3, IMG_HEIGHT, f) != IMG_HEIGHT) {
-        printf("write error\n");
-        exit(1);
-    }
-
-    fclose(f);
-}
-
 static void debayer_BGGR_float(const struct bayer_image *bayer, struct rgbf_image *rgb)
 {
     /*
@@ -349,10 +311,7 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
     return true;    
 }
 
-static struct timeval tp1;
-static struct timeval tp2;
-
-void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, const char *linkname, struct timeval tv)
+void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, const char *linkname, uint64_t capturetime_millisec)
 {
     printf("Processing %u bytes\n", size);
     struct bayer_image *bayer;
@@ -362,7 +321,8 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
     //struct timeval tv;
     struct tm tm;
     //gettimeofday(&tv, NULL);
-    time_t t = tv.tv_sec;
+    time_t t = capturetime_millisec/1E3;
+    int remainderms = (int)(capturetime_millisec % (uint64_t)1E3);
     gmtime_r(&t, &tm);
 
     char *fname = NULL;
@@ -374,7 +334,7 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
              tm.tm_hour,
              tm.tm_min,
              tm.tm_sec,
-             tv.tv_usec/10000);
+             remainderms/(int)10);
     printf("fname=%s\n", fname);
     
     signal(SIGCHLD, SIG_IGN);
