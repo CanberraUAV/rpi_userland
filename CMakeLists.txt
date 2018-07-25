@@ -66,9 +66,9 @@ endif()
 add_subdirectory(interface/vcos)
 add_subdirectory(interface/vmcs_host)
 add_subdirectory(interface/vchiq_arm)
-if(NOT ARM64)
-   add_subdirectory(interface/khronos)
-endif()
+#if(NOT ARM64)
+#   add_subdirectory(interface/khronos)
+#endif()
 
 #add_subdirectory(opensrc/tools/lua)
 if(BUILD_MMAL)
@@ -78,13 +78,13 @@ if(BUILD_MMAL)
 endif()
 
 # VidTex supports Android and Linux
-if(BUILD_MMAL_APPS)
-add_subdirectory(host_applications/android/apps/vidtex)
-endif(BUILD_MMAL_APPS)
+#if(BUILD_MMAL_APPS)
+#add_subdirectory(host_applications/android/apps/vidtex)
+#endif(BUILD_MMAL_APPS)
 
-if(NOT ARM64)
-   add_subdirectory(middleware/openmaxil)
-endif()
+#if(NOT ARM64)
+#   add_subdirectory(middleware/openmaxil)
+#endif()
 
 # 3d demo code
 #if(NOT ANDROID)
@@ -112,8 +112,8 @@ endif()
 
 # add linux apps
 add_subdirectory(host_applications/linux)
-add_subdirectory(opensrc/helpers/libfdt)
-add_subdirectory(helpers/dtoverlay)
+#add_subdirectory(opensrc/helpers/libfdt)
+#add_subdirectory(helpers/dtoverlay)
 
 set(vmcs_host_apps_VERSION_MAJOR 1)
 set(vmcs_host_apps_VERSION_MINOR 0)
