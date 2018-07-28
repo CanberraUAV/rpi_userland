@@ -85,6 +85,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <semaphore.h>
 
 #include "cuav_util.h"
+#include <sys/time.h>
 
 // Standard port setting for the camera component
 #define MMAL_CAMERA_PREVIEW_PORT 0
@@ -180,6 +181,7 @@ typedef struct
    struct file_buffer *buffer;
    VCOS_SEMAPHORE_T complete_semaphore; /// semaphore which is posted when we reach end of frame (indicates end of capture or fault)
    RASPISTILL_STATE *pstate;            /// pointer to our state in case required in callback
+   struct timeval tv;
 } PORT_USERDATA;
 
 static void display_valid_parameters(char *app_name);
@@ -911,6 +913,10 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
    {
       int bytes_written = buffer->length;
 
+      if (pData->buffer && pData->buffer->offset == 0) {
+          gettimeofday(&pData->tv, NULL);
+      }
+    
       if (buffer->length && pData->buffer && pData->buffer->offset + buffer->length < sizeof(pData->buffer->data))
       {
          mmal_buffer_header_mem_lock(buffer);
@@ -1060,7 +1066,7 @@ static MMAL_STATUS_T create_camera_component(RASPISTILL_STATE *state)
          .num_preview_video_frames = 3,
          .stills_capture_circular_buffer_height = 0,
          .fast_preview_resume = 0,
-         .use_stc_timestamp = MMAL_PARAM_TIMESTAMP_MODE_RESET_STC
+         .use_stc_timestamp = MMAL_PARAM_TIMESTAMP_MODE_RAW_STC
       };
 
       if (state->fullResPreview)
@@ -1639,9 +1645,9 @@ static int wait_for_next_frame(RASPISTILL_STATE *state, int *frame)
             else
             {
                int nskip = 1 + (-this_delay_ms)/state->timelapse;
-               vcos_log_error("Skipping frame %d to restart at frame %d", *frame, *frame+nskip);
                *frame += nskip;
                this_delay_ms += nskip * state->timelapse;
+               vcos_log_error("Skipping frame %d to restart at frame %d delay %u", *frame, *frame+nskip, this_delay_ms);
                vcos_sleep(this_delay_ms);
                next_frame_ms += (nskip + 1) * state->timelapse;
             }
@@ -1750,7 +1756,7 @@ static int wait_for_next_frame(RASPISTILL_STATE *state, int *frame)
 
 static void finalise_file(RASPISTILL_STATE *state, PORT_USERDATA *callback_data)
 {
-    cuav_process(callback_data->buffer->data, callback_data->buffer->offset, callback_data->filename);
+    cuav_process(callback_data->buffer->data, callback_data->buffer->offset, callback_data->filename, &callback_data->tv);
     free(callback_data->buffer);
     callback_data->buffer = NULL;
 }

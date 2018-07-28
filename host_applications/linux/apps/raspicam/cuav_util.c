@@ -22,6 +22,7 @@
 
 #include "libjpeg/jpeglib.h"
 #include "cuav_util.h"
+#include <sys/time.h>
 
 #pragma GCC optimize("O3")
 
@@ -352,17 +353,43 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
 static struct timeval tp1;
 static struct timeval tp2;
 
-void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename)
+static unsigned num_children_created;
+static volatile unsigned num_children_exited;
+
+static void child_exit(void)
+{
+    int status=0;
+    while (waitpid(-1, &status, WNOHANG) > 0) {
+        num_children_exited++;
+    }
+}
+
+/*
+  automatically cope with system load
+ */
+static void control_delay(void)
+{
+    static unsigned delay_us = 100000;
+    int children_active = (int)num_children_created - (int)num_children_exited;
+    if (children_active > 6) {
+        delay_us *= 1.2;
+    } else if (children_active < 4) {
+        delay_us *= 0.9;
+    }
+    printf("Delay %u active %d\n", delay_us, children_active);
+    usleep(delay_us);
+}
+
+
+void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, const struct timeval *tv)
 {
     printf("Processing %u bytes\n", size);
     struct bayer_image *bayer;
     struct rgbf_image *rgbf;
     struct rgb8_image *rgb8;
 
-    struct timeval tv;
     struct tm tm;
-    gettimeofday(&tv, NULL);
-    time_t t = tv.tv_sec;
+    time_t t = tv->tv_sec;
     gmtime_r(&t, &tm);
 
     char *fname = NULL;
@@ -374,7 +401,7 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename)
              tm.tm_hour,
              tm.tm_min,
              tm.tm_sec,
-             tv.tv_usec/10000);
+             tv->tv_usec/10000);
     printf("fname=%s\n", fname);
 
     char *fname_orig = NULL;
@@ -386,14 +413,17 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename)
              tm.tm_hour,
              tm.tm_min,
              tm.tm_sec,
-             tv.tv_usec/10000);
+             tv->tv_usec/10000);
     
-    signal(SIGCHLD, SIG_IGN);
-
     if (!shading) {
         create_lens_shading();
     }
-    
+
+    if (num_children_created == 0) {
+        signal(SIGCHLD, child_exit);
+    }
+
+    num_children_created++;
     if (fork() == 0) {
         // run processing and saving in background
 
@@ -411,7 +441,13 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename)
         rgbf_to_rgb8(rgbf, rgb8);
         free(rgbf);
         
-        write_JPG(fname, rgb8, 100);
+        signal(SIGCHLD, SIG_IGN);
+        
+        if (fork() == 0) {
+            // do the IO in a separate process
+            write_JPG(fname, rgb8, 100);
+            _exit(0);
+        }
 
         free(rgb8);
 
@@ -426,4 +462,6 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename)
 
     free(fname);
     free(fname_orig);
+
+    control_delay();
 }
