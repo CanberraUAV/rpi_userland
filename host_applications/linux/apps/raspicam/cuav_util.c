@@ -350,9 +350,6 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
     return true;    
 }
 
-static struct timeval tp1;
-static struct timeval tp2;
-
 static unsigned num_children_created;
 static volatile unsigned num_children_exited;
 
@@ -381,7 +378,7 @@ static void control_delay(void)
 }
 
 
-void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, const struct timeval *tv)
+void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, const char *linkname, const struct timeval *tv)
 {
     printf("Processing %u bytes\n", size);
     struct bayer_image *bayer;
@@ -446,16 +443,13 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
         if (fork() == 0) {
             // do the IO in a separate process
             write_JPG(fname, rgb8, 100);
+            unlink(linkname);
+            symlink(fname, linkname);
             _exit(0);
         }
 
-        free(rgb8);
 
-#if 0
-        FILE *f = fopen(fname_orig, "w");
-        fwrite(buffer, size, 1, f);
-        fclose(f);
-#endif
+        free(rgb8);
         
         _exit(0);
     }
