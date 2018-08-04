@@ -388,6 +388,9 @@ static void control_delay(void)
     } else if (children_active < 4) {
         delay_us *= 0.9;
     }
+    if (delay_us < 1000) {
+        delay_us = 1000;
+    }
     printf("Delay %u active %d\n", delay_us, children_active);
     usleep(delay_us);
 }
@@ -452,13 +455,18 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
         rgb8 = malloc(sizeof(*rgb8));
         rgbf_to_rgb8(rgbf, rgb8);
         free(rgbf);
-        
-        write_JPG(fname, rgb8, 100, halfres);
-        unlink(linkname);
-        symlink(fname, linkname);
 
-        free(rgb8);
         signal(SIGCHLD, SIG_IGN);
+
+        if (fork() == 0) {
+            // do the IO in a separate process
+            write_JPG(fname, rgb8, 100, halfres);
+            unlink(linkname);
+            symlink(fname, linkname);
+            _exit(0);
+        }
+        
+        free(rgb8);
         _exit(0);
     }
 
