@@ -21,6 +21,7 @@
 #include <math.h>       
 
 #include "libjpeg/jpeglib.h"
+#include <stdbool.h>
 #include "cuav_util.h"
 #include <sys/time.h>
 
@@ -312,7 +313,7 @@ static void extract_rpi_bayer(const uint8_t *buffer, uint32_t size, struct bayer
 /*
   write a JPG image
  */
-static bool write_JPG(const char *filename, const struct rgb8_image *img, int quality)
+static bool write_JPG(const char *filename, const struct rgb8_image *img, int quality, bool halfres)
 {
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr jerr;
@@ -327,8 +328,13 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
     }
     jpeg_stdio_dest(&cinfo, outfile);
 
-    cinfo.image_width = IMG_WIDTH;
-    cinfo.image_height = IMG_HEIGHT;
+    if (halfres) {
+        cinfo.image_width = IMG_WIDTH/2;
+        cinfo.image_height = IMG_HEIGHT/2;
+    } else {
+        cinfo.image_width = IMG_WIDTH;
+        cinfo.image_height = IMG_HEIGHT;
+    }
     cinfo.input_components = 3;
     cinfo.in_color_space = JCS_RGB;
 
@@ -339,7 +345,16 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
 
     while (cinfo.next_scanline < cinfo.image_height) {
         JSAMPROW row[1];
-        row[0] = (JSAMPROW)&img->data[cinfo.next_scanline][0];
+        if (halfres) {
+            struct rgb8 hrow[IMG_WIDTH/2];
+            uint16_t i;
+            for (i=0; i<IMG_WIDTH/2; i++) {
+                hrow[i] = img->data[cinfo.next_scanline*2][i*2];
+            }
+            row[0] = (JSAMPROW)&hrow[0];
+        } else {
+            row[0] = (JSAMPROW)&img->data[cinfo.next_scanline][0];
+        }
         jpeg_write_scanlines(&cinfo, row, 1);
     }
     
@@ -378,7 +393,7 @@ static void control_delay(void)
 }
 
 
-void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, const char *linkname, const struct timeval *tv)
+void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, const char *linkname, const struct timeval *tv, bool halfres)
 {
     printf("Processing %u bytes\n", size);
     struct bayer_image *bayer;
@@ -438,19 +453,12 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
         rgbf_to_rgb8(rgbf, rgb8);
         free(rgbf);
         
-        signal(SIGCHLD, SIG_IGN);
-        
-        if (fork() == 0) {
-            // do the IO in a separate process
-            write_JPG(fname, rgb8, 100);
-            unlink(linkname);
-            symlink(fname, linkname);
-            _exit(0);
-        }
-
+        write_JPG(fname, rgb8, 100, halfres);
+        unlink(linkname);
+        symlink(fname, linkname);
 
         free(rgb8);
-        
+        signal(SIGCHLD, SIG_IGN);
         _exit(0);
     }
 
