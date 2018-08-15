@@ -24,6 +24,7 @@
 #include <stdbool.h>
 #include "cuav_util.h"
 #include <sys/time.h>
+#include <sys/mman.h>
 
 #pragma GCC optimize("O3")
 
@@ -479,19 +480,19 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
     if (fork() == 0) {
         // run processing and saving in background
 
-        bayer = malloc(sizeof(*bayer));
+        bayer = mm_alloc(sizeof(*bayer));
     
         extract_rpi_bayer(buffer, size, bayer);
 
-        rgbf = malloc(sizeof(*rgbf));
+        rgbf = mm_alloc(sizeof(*rgbf));
         debayer_BGGR_float(bayer, rgbf);
-        free(bayer);
+        mm_free(bayer, sizeof(*bayer));
 
         rgbf_change_saturation(rgbf, 1.5);
         
-        rgb8 = malloc(sizeof(*rgb8));
+        rgb8 = mm_alloc(sizeof(*rgb8));
         rgbf_to_rgb8(rgbf, rgb8);
-        free(rgbf);
+        mm_free(rgbf, sizeof(*rgbf));
 
         signal(SIGCHLD, SIG_IGN);
 
@@ -503,7 +504,7 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
             _exit(0);
         }
         
-        free(rgb8);
+        mm_free(rgb8, sizeof(*rgb8));
         _exit(0);
     }
 
@@ -511,4 +512,19 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
     free(fname_orig);
 
     control_delay();
+}
+
+void *mm_alloc(uint32_t size)
+{
+    uint32_t pagesize = getpagesize();
+    uint32_t num_pages = (size + pagesize - 1) / pagesize;
+    return mmap(0, num_pages*pagesize, PROT_READ | PROT_WRITE, 
+                MAP_ANON | MAP_PRIVATE, -1, 0);
+}
+
+void mm_free(void *ptr, uint32_t size)
+{
+    uint32_t pagesize = getpagesize();
+    uint32_t num_pages = (size + pagesize - 1) / pagesize;
+    munmap(ptr, num_pages*pagesize);
 }
