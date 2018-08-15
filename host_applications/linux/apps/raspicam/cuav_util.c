@@ -32,8 +32,9 @@
 #define DATA_OFFSET 0x8000
 
 // RPI image size
-#define IMG_WIDTH 3280
-#define IMG_HEIGHT 2464
+#define SCALING 2
+#define IMG_WIDTH (3280/SCALING)
+#define IMG_HEIGHT (2464/SCALING)
 
 #define PACKED __attribute__((__packed__))
 
@@ -49,7 +50,7 @@ struct PACKED rgbf {
   16 bit bayer grid
  */
 struct PACKED bayer_image {
-    uint16_t data[IMG_HEIGHT][IMG_WIDTH];
+    uint16_t data[IMG_HEIGHT*SCALING][IMG_WIDTH*SCALING];
 };
 
 /*
@@ -148,6 +149,7 @@ static void save_ppm(const struct rgb8_image *rgb, const char *fname)
     fclose(f);
 }
 
+#if SCALING == 1
 static void debayer_BGGR_float(const struct bayer_image *bayer, struct rgbf_image *rgb)
 {
     /*
@@ -188,6 +190,55 @@ static void debayer_BGGR_float(const struct bayer_image *bayer, struct rgbf_imag
     memcpy(rgb->data[0], rgb->data[1], IMG_WIDTH*sizeof(rgb->data[0][0]));
     memcpy(rgb->data[IMG_HEIGHT-1], rgb->data[IMG_HEIGHT-2], IMG_WIDTH*sizeof(rgb->data[0][0]));
 }
+#elif SCALING == 2
+static void debayer_BGGR_float(const struct bayer_image *bayer, struct rgbf_image *rgb)
+{
+    /*
+      layout in the input image is in blocks of 4 values. The top
+      left corner of the image looks like this
+      B G B G
+      G R G R
+      B G B G
+      G R G R
+    */
+    uint16_t x, y;
+    for (y=1; y<IMG_HEIGHT*SCALING-2; y += 2) {
+        for (x=1; x<IMG_WIDTH*SCALING-2; x += 2) {
+            float r, g, b;
+            
+            r = bayer->data[y+0][x+0];
+            g = ((uint16_t)bayer->data[y-1][x+0] + (uint16_t)bayer->data[y+0][x-1] +
+                 (uint16_t)bayer->data[y+1][x+0] + (uint16_t)bayer->data[y+0][x+1]) >> 2;
+            b = ((uint16_t)bayer->data[y-1][x-1] + (uint16_t)bayer->data[y+1][x-1] +
+                 (uint16_t)bayer->data[y-1][x+1] + (uint16_t)bayer->data[y+1][x+1]) >> 2;
+            
+            r += ((uint16_t)bayer->data[y+0][x+0] + (uint16_t)bayer->data[y+0][x+2]) >> 1;
+            g += bayer->data[y+0][x+1];
+            b += ((uint16_t)bayer->data[y-1][x+1] + (uint16_t)bayer->data[y+1][x+1]) >> 1;
+
+            r += ((uint16_t)bayer->data[y+0][x+0] + (uint16_t)bayer->data[y+2][x+0]) >> 1;
+            g += bayer->data[y+1][x+0];
+            b += ((uint16_t)bayer->data[y+1][x-1] + (uint16_t)bayer->data[y+1][x+1]) >> 1;
+
+            r += ((uint16_t)bayer->data[y+0][x+0] + (uint16_t)bayer->data[y+2][x+0] +
+                  (uint16_t)bayer->data[y+0][x+2] + (uint16_t)bayer->data[y+2][x+2]) >> 2;
+            g += ((uint16_t)bayer->data[y+0][x+1] + (uint16_t)bayer->data[y+1][x+2] +
+                  (uint16_t)bayer->data[y+2][x+1] + (uint16_t)bayer->data[y+1][x+0]) >> 2;
+            b += bayer->data[y+1][x+1];
+            
+            rgb->data[y/2][x/2].r = r*0.25;
+            rgb->data[y/2][x/2].g = g*0.25;
+            rgb->data[y/2][x/2].b = b*0.25;
+        }
+        //rgb->data[y/2][0] = rgb->data[y/2][1];
+        //rgb->data[y+1][0] = rgb->data[y+1][1];
+        //rgb->data[y+0][IMG_WIDTH-1] = rgb->data[y+0][IMG_WIDTH-2];
+        //rgb->data[y+1][IMG_WIDTH-1] = rgb->data[y+1][IMG_WIDTH-2];
+    }
+    //memcpy(rgb->data[0], rgb->data[1], IMG_WIDTH*sizeof(rgb->data[0][0]));
+    //memcpy(rgb->data[IMG_HEIGHT-1], rgb->data[IMG_HEIGHT-2], IMG_WIDTH*sizeof(rgb->data[0][0]));
+}
+#endif
 
 static void rgbf_change_saturation(struct rgbf_image *rgbf, float change)
 {
@@ -300,7 +351,7 @@ static void extract_rpi_bayer(const uint8_t *buffer, uint32_t size, struct bayer
            header.width, header.height, header.format, header.name, raw_stride,
            header.bayer_order);
 
-    if (header.width != IMG_WIDTH || header.height != IMG_HEIGHT) {
+    if (header.width != IMG_WIDTH*SCALING || header.height != IMG_HEIGHT*SCALING) {
         printf("Unexpected image size\n");
         exit(1);
     }
@@ -328,13 +379,8 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
     }
     jpeg_stdio_dest(&cinfo, outfile);
 
-    if (halfres) {
-        cinfo.image_width = IMG_WIDTH/2;
-        cinfo.image_height = IMG_HEIGHT/2;
-    } else {
-        cinfo.image_width = IMG_WIDTH;
-        cinfo.image_height = IMG_HEIGHT;
-    }
+    cinfo.image_width = IMG_WIDTH;
+    cinfo.image_height = IMG_HEIGHT;
     cinfo.input_components = 3;
     cinfo.in_color_space = JCS_RGB;
 
@@ -345,16 +391,7 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
 
     while (cinfo.next_scanline < cinfo.image_height) {
         JSAMPROW row[1];
-        if (halfres) {
-            struct rgb8 hrow[IMG_WIDTH/2];
-            uint16_t i;
-            for (i=0; i<IMG_WIDTH/2; i++) {
-                hrow[i] = img->data[cinfo.next_scanline*2][i*2];
-            }
-            row[0] = (JSAMPROW)&hrow[0];
-        } else {
-            row[0] = (JSAMPROW)&img->data[cinfo.next_scanline][0];
-        }
+        row[0] = (JSAMPROW)&img->data[cinfo.next_scanline][0];
         jpeg_write_scanlines(&cinfo, row, 1);
     }
     
