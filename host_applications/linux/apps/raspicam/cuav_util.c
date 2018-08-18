@@ -498,6 +498,13 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
 
         if (fork() == 0) {
             // do the IO in a separate process
+            char *stop_name = NULL;
+            struct stat st;
+            asprintf(&stop_name, "%s.stop", linkname);
+            if (stop_name && stat(stop_name, &st) == 0) {
+                printf("** Stop file exists\n");
+                _exit(0);
+            }
             write_JPG(fname, rgb8, 100, halfres);
             unlink(linkname);
             symlink(fname, linkname);
