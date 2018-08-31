@@ -25,6 +25,7 @@
 #include "cuav_util.h"
 #include <sys/time.h>
 #include <sys/mman.h>
+#include <pthread.h>
 
 #pragma GCC optimize("O3")
 
@@ -36,6 +37,20 @@
 #define SCALING 2
 #define IMG_WIDTH (3280/SCALING)
 #define IMG_HEIGHT (2464/SCALING)
+
+static unsigned num_children_created;
+static pthread_mutex_t counter_lock = PTHREAD_MUTEX_INITIALIZER;
+static volatile unsigned num_children_exited;
+
+static void thread_exit(void)
+{
+    pthread_mutex_lock(&counter_lock);
+    num_children_exited++;
+    pthread_mutex_unlock(&counter_lock);
+    static int ret = 0;
+    pthread_exit(&ret);
+}
+    
 
 #define PACKED __attribute__((__packed__))
 
@@ -112,43 +127,6 @@ static void extract_raw10(const uint8_t *b, uint16_t width, uint16_t height, uin
     }
 }
 
-
-static void save_pgm(const struct bayer_image *bayer, const char *fname)
-{
-    FILE *f = fopen(fname, "w");
-    if (f == NULL) {
-        perror(fname);
-        exit(1);
-    }
-    fprintf(f, "P5\n%u %u\n65535\n", IMG_WIDTH, IMG_HEIGHT);
-    uint16_t y;
-    for (y=0; y<IMG_HEIGHT; y++) {
-        uint16_t row[IMG_WIDTH];
-        swab(&bayer->data[y][0], &row[0], IMG_WIDTH*2);
-        if (fwrite(&row[0], IMG_WIDTH*2, 1, f) != 1) {
-            printf("write error\n");
-            exit(1);
-        }
-    }
-
-    fclose(f);
-}
-
-static void save_ppm(const struct rgb8_image *rgb, const char *fname)
-{
-    FILE *f = fopen(fname, "w");
-    if (f == NULL) {
-        perror(fname);
-        exit(1);
-    }
-    fprintf(f, "P6\n%u %u\n255\n", IMG_WIDTH, IMG_HEIGHT);
-    if (fwrite(&rgb->data[0][0], IMG_WIDTH*3, IMG_HEIGHT, f) != IMG_HEIGHT) {
-        printf("write error\n");
-        exit(1);
-    }
-
-    fclose(f);
-}
 
 #if SCALING == 1
 static void debayer_BGGR_float(const struct bayer_image *bayer, struct rgbf_image *rgb)
@@ -241,27 +219,6 @@ static void debayer_BGGR_float(const struct bayer_image *bayer, struct rgbf_imag
 }
 #endif
 
-static void rgbf_change_saturation(struct rgbf_image *rgbf, float change)
-{
-    const float Pr = .299;
-    const float Pg = .587;
-    const float Pb = .114;
-
-    uint16_t x, y;
-    for (y=0; y<IMG_HEIGHT; y++) {
-        for (x=0; x<IMG_WIDTH; x++) {
-            float r = rgbf->data[y][x].r;
-            float g = rgbf->data[y][x].g;
-            float b = rgbf->data[y][x].b;
-            //float P = sqrtf(r*r+Pr + g*g*Pg + b*b*Pb);
-            float P = Pr*r + Pb*b + Pg*g;
-            rgbf->data[y][x].r = P + (r - P) * change;
-            rgbf->data[y][x].g = P + (g - P) * change;
-            rgbf->data[y][x].b = P + (b - P) * change;
-        }
-    }
-}
-
 static struct lens_shading *shading;
 const float shading_scale_factor = 1.9;
 
@@ -343,7 +300,8 @@ static void extract_rpi_bayer(const uint8_t *buffer, uint32_t size, struct bayer
 
     if (strncmp(header.tag, "BRCM", 4) != 0) {
         printf("bad header name - expected BRCM\n");
-        exit(1);
+        static int ret = -1;
+        thread_exit();
     }
 
     uint32_t raw_stride = ((((((header.width + header.padding_right)*5)+3)>>2) + 31)&(~31));
@@ -354,7 +312,8 @@ static void extract_rpi_bayer(const uint8_t *buffer, uint32_t size, struct bayer
 
     if (header.width != IMG_WIDTH*SCALING || header.height != IMG_HEIGHT*SCALING) {
         printf("Unexpected image size\n");
-        exit(1);
+        static int ret = -1;
+        thread_exit();
     }
 
     b = &buffer[size - (BRCM_OFFSET - DATA_OFFSET)];
@@ -365,7 +324,7 @@ static void extract_rpi_bayer(const uint8_t *buffer, uint32_t size, struct bayer
 /*
   write a JPG image
  */
-static bool write_JPG(const char *filename, const struct rgb8_image *img, int quality, bool halfres)
+static bool write_JPG(const char *filename, const struct rgb8_image *img, int quality)
 {
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr jerr;
@@ -403,27 +362,18 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
     return true;    
 }
 
-static unsigned num_children_created;
-static volatile unsigned num_children_exited;
-
-static void child_exit(void)
-{
-    int status=0;
-    while (waitpid(-1, &status, WNOHANG) > 0) {
-        num_children_exited++;
-    }
-}
-
 /*
   automatically cope with system load
  */
 static void control_delay(void)
 {
     static unsigned delay_us = 100000;
+    pthread_mutex_lock(&counter_lock);
     int children_active = (int)num_children_created - (int)num_children_exited;
-    if (children_active > 6) {
+    pthread_mutex_unlock(&counter_lock);
+    if (children_active > 12) {
         delay_us *= 1.2;
-    } else if (children_active < 4) {
+    } else if (children_active < 8) {
         delay_us *= 0.9;
     }
     if (delay_us < 1000) {
@@ -433,17 +383,86 @@ static void control_delay(void)
     usleep(delay_us);
 }
 
+struct child_info {
+    char *fname;
+    const char *linkname;
+    uint8_t *buffer;
+    uint32_t size;
+};
+
+static void *process_image(void *arg)
+{
+    struct child_info *cinfo = arg;
+
+    struct bayer_image *bayer = mm_alloc(sizeof(*bayer));
+    if (!bayer) {
+        mm_free(cinfo->buffer, cinfo->size);
+        free(cinfo->fname);
+        free(cinfo);
+        thread_exit();
+        return NULL;
+    }
+    
+    extract_rpi_bayer(cinfo->buffer, cinfo->size, bayer);
+
+    mm_free((void *)cinfo->buffer, cinfo->size);
+        
+    struct rgbf_image *rgbf = mm_alloc(sizeof(*rgbf));
+    if (!rgbf) {
+        mm_free(bayer, sizeof(*bayer));
+        free(cinfo->fname);
+        free(cinfo);
+        thread_exit();
+        return NULL;
+    }
+    
+    debayer_BGGR_float(bayer, rgbf);
+
+    mm_free(bayer, sizeof(*bayer));
+
+    struct rgb8_image *rgb8 = mm_alloc(sizeof(*rgb8));
+    if (!rgb8) {
+        mm_free(rgbf, sizeof(*rgbf));
+        free(cinfo->fname);
+        free(cinfo);
+        thread_exit();
+        return NULL;
+    }
+    
+    rgbf_to_rgb8(rgbf, rgb8);
+
+    mm_free(rgbf, sizeof(*rgbf));
+    
+    char *stop_name = NULL;
+    struct stat st;
+    asprintf(&stop_name, "%s.stop", cinfo->linkname);
+    if (stop_name && stat(stop_name, &st) == 0) {
+        printf("** Stop file exists\n");
+        thread_exit();
+        return NULL;
+    }
+    write_JPG(cinfo->fname, rgb8, 100);
+    unlink(cinfo->linkname);
+    symlink(cinfo->fname, cinfo->linkname);
+
+    mm_free(rgb8, sizeof(*rgb8));
+    free(cinfo->fname);
+    free(cinfo);
+    thread_exit();
+    return NULL;
+}
 
 void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, const char *linkname, const struct timeval *tv, bool halfres)
 {
     printf("Processing %u bytes\n", size);
-    struct bayer_image *bayer;
-    struct rgbf_image *rgbf;
-    struct rgb8_image *rgb8;
 
     struct tm tm;
     time_t t = tv->tv_sec;
     gmtime_r(&t, &tm);
+
+    if (!shading) {
+        create_lens_shading();
+    }
 
     char *fname = NULL;
     asprintf(&fname, "%s%04u%02u%02u%02u%02u%02u%02uZ.jpg",
@@ -454,69 +473,41 @@ void cuav_process(const uint8_t *buffer, uint32_t size, const char *filename, co
              tm.tm_hour,
              tm.tm_min,
              tm.tm_sec,
-             tv->tv_usec/10000);
+             (unsigned)(tv->tv_usec/10000));
+    if (!fname) {
+        return;
+    }
     printf("fname=%s\n", fname);
 
-    char *fname_orig = NULL;
-    asprintf(&fname_orig, "%s%04u%02u%02u%02u%02u%02u%02uZ-orig.jpg",
-             filename,
-             tm.tm_year+1900,
-             tm.tm_mon+1,
-             tm.tm_mday,
-             tm.tm_hour,
-             tm.tm_min,
-             tm.tm_sec,
-             tv->tv_usec/10000);
-    
-    if (!shading) {
-        create_lens_shading();
-    }
-
-    if (num_children_created == 0) {
-        signal(SIGCHLD, child_exit);
-    }
-
     num_children_created++;
-    if (fork() == 0) {
-        // run processing and saving in background
 
-        bayer = mm_alloc(sizeof(*bayer));
-    
-        extract_rpi_bayer(buffer, size, bayer);
-
-        rgbf = mm_alloc(sizeof(*rgbf));
-        debayer_BGGR_float(bayer, rgbf);
-        mm_free(bayer, sizeof(*bayer));
-
-        //rgbf_change_saturation(rgbf, 1.5);
-        
-        rgb8 = mm_alloc(sizeof(*rgb8));
-        rgbf_to_rgb8(rgbf, rgb8);
-        mm_free(rgbf, sizeof(*rgbf));
-
-        signal(SIGCHLD, SIG_IGN);
-
-        if (fork() == 0) {
-            // do the IO in a separate process
-            char *stop_name = NULL;
-            struct stat st;
-            asprintf(&stop_name, "%s.stop", linkname);
-            if (stop_name && stat(stop_name, &st) == 0) {
-                printf("** Stop file exists\n");
-                _exit(0);
-            }
-            write_JPG(fname, rgb8, 100, halfres);
-            unlink(linkname);
-            symlink(fname, linkname);
-            _exit(0);
-        }
-        
-        mm_free(rgb8, sizeof(*rgb8));
-        _exit(0);
+    uint8_t *buf2 = mm_alloc(size);
+    if (!buf2) {
+        free(fname);
+        return;
     }
+    memcpy(buf2, buffer, size);
 
-    free(fname);
-    free(fname_orig);
+    struct child_info *cinfo;
+    cinfo = malloc(sizeof(*cinfo));
+    if (!cinfo) {
+        mm_free(buf2, size);
+        free(fname);
+        return;
+    }
+    cinfo->fname = fname;
+    cinfo->buffer = buf2;
+    cinfo->size = size;
+    cinfo->linkname = linkname;
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, process_image, cinfo) != 0) {
+        mm_free(buf2, size);
+        free(fname);
+        free(cinfo);
+        return;        
+    }
+    pthread_detach(thread);
 
     control_delay();
 }
