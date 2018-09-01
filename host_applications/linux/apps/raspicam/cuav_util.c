@@ -370,9 +370,18 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
 static void control_delay(void)
 {
     static unsigned delay_us = 100000;
-    pthread_mutex_lock(&counter_lock);
-    int children_active = (int)num_children_created - (int)num_children_exited;
-    pthread_mutex_unlock(&counter_lock);
+    const int max_children = 30;
+    int children_active;
+    do {
+        pthread_mutex_lock(&counter_lock);
+        children_active = (int)num_children_created - (int)num_children_exited;
+        pthread_mutex_unlock(&counter_lock);
+        if (children_active < max_children) {
+            break;
+        }
+        printf("children_active %d\n", children_active);
+        sleep(1);
+    } while (children_active > max_children);
     if (children_active > 12) {
         delay_us *= 1.2;
     } else if (children_active < 8) {
