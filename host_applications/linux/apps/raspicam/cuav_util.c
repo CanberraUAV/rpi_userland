@@ -40,6 +40,7 @@
 
 static unsigned num_children_created;
 static pthread_mutex_t counter_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t jpeg_lock = PTHREAD_MUTEX_INITIALIZER;
 static volatile unsigned num_children_exited;
 
 static void thread_exit(void)
@@ -328,11 +329,13 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
     struct jpeg_error_mgr jerr;
     FILE *outfile;
     
+    pthread_mutex_lock(&jpeg_lock);
     cinfo.err = jpeg_std_error(&jerr);
     jpeg_create_compress(&cinfo);
 
     if ((outfile = fopen(filename, "wb")) == NULL) {
         fprintf(stderr, "can't open %s\n", filename);
+        pthread_mutex_unlock(&jpeg_lock);
         return false;
     }
     jpeg_stdio_dest(&cinfo, outfile);
@@ -354,6 +357,7 @@ static bool write_JPG(const char *filename, const struct rgb8_image *img, int qu
     }
     
     jpeg_finish_compress(&cinfo);
+    pthread_mutex_unlock(&jpeg_lock);
     fclose(outfile);
     jpeg_destroy_compress(&cinfo);
 
