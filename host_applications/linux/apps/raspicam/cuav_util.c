@@ -449,9 +449,13 @@ static void *process_image(void *arg)
     asprintf(&stop_name, "%s.stop", cinfo->linkname);
     if (stop_name && stat(stop_name, &st) == 0) {
         printf("** Stop file exists\n");
+        mm_free(rgb8, sizeof(*rgb8));
+        free(cinfo->fname);
+        free(cinfo);
         thread_exit();
         return NULL;
     }
+    
     write_JPG(cinfo->fname, rgb8, 100);
     unlink(cinfo->linkname);
     symlink(cinfo->fname, cinfo->linkname);
